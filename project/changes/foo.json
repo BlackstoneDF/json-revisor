@@ -1,12 +1,1 @@
-[
-    {
-        "op": "replace",
-        "path": "/age",
-        "value": 31
-    },
-    {
-        "op": "add",
-        "path": "/city",
-        "value": "New York"
-    }
-]
+[{"op":"replace","path":"/age","value":31},{"op":"add","path":"/city","value":"New York"}]

@@ -1,0 +1,10 @@
+build
+original - have all the files
+changes - have all the files matching changes, but not required
+changed - empty
+
+update
+original - have all the files
+changes - empty
+changed - have all files but changed
+

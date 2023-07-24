@@ -1,9 +1,9 @@
-use std::{path::Path, io::ErrorKind};
+use std::{path::Path, io::{self}, process::exit};
 
 use colored::Colorize;
 
 pub enum ApplicationError<'a> {
-    IoError(ErrorKind),
+    IoError(io::Error),
     UnexpectedArgumentSize {
         expected: usize,
         received: usize,
@@ -26,7 +26,7 @@ pub enum ApplicationError<'a> {
 }
 
 impl ApplicationError<'_> {
-    pub fn print(self) {
+    pub fn throw(self) -> ! {
         let message: String = match self {
             ApplicationError::UnexpectedArgumentSize { expected, received } => format!(
                 "Not enough arguments, expected: {}, got: {}",
@@ -47,5 +47,22 @@ impl ApplicationError<'_> {
             ApplicationError::IoError(err) => err.to_string(),
         };
         eprintln!("{}{}", "Error: ".red(), message.red());
+        panic!();
+        exit(101);
+    }
+}
+
+pub trait UnwrapAppError<T> {
+    fn unwrap_app_error(self) -> T;
+}
+
+impl<T> UnwrapAppError<T> for io::Result<T> {
+    fn unwrap_app_error(self: Result<T, std::io::Error>) -> T {
+        match self {
+            Ok(it) => it,
+            Err(err) => {
+                ApplicationError::IoError(err).throw();
+            }
+        }
     }
 }

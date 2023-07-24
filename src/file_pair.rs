@@ -73,18 +73,19 @@ pub fn replace_item(
     Ok(vec.iter().collect())
 }
 
+#[derive(Debug)]
 pub struct FilePathTrio {
-    pub key: PathBuf,
-    pub matching: PathBuf,
-    pub result: PathBuf,
+    pub original: PathBuf,
+    pub changes: PathBuf,
+    pub changed: PathBuf,
 }
 
 impl FilePathTrio {
     fn new(key: PathBuf, matching: PathBuf, result: PathBuf) -> Self {
         Self {
-            key,
-            matching,
-            result,
+            original: key,
+            changes: matching,
+            changed: result,
         }
     }
 }
