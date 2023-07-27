@@ -11,3 +11,4 @@ get file pairs(root, original, changes, current_path default = "")
             new_path = current_path.clone()
             new_path.push(path)
             get file pairs(root, original, changes, new_path)
+

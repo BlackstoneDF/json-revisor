@@ -10,8 +10,8 @@ use json_patch::Patch;
 use serde_json::{from_value, to_string_pretty, Value};
 
 use crate::{
-    error::{ApplicationError, UnwrapAppError},
-    file_pair::get_file_pairs,
+    error::{AppError, UnwrapAppPathlessError},
+    file_trio::{get_file_trios, FindFileTriosError, TrioInitError},
 };
 
 /*
@@ -20,9 +20,18 @@ changes - have all the files matching changes, but not required
 changed - empty
 */
 pub fn build(original_path: OsString, matches: OsString, result: OsString) {
-    let trios =
-        get_file_pairs(PathBuf::from("."), original_path, matches, result).unwrap_app_error();
-
+    let trios = match get_file_trios(PathBuf::from("."), original_path, matches, result) {
+        Ok(it) => it,
+        Err(err) => match err {
+            FindFileTriosError::TrioInitError(err) => match err {
+                TrioInitError::InconsistentFileTypes(err) => AppError::InconsistentFileTypes(err),
+                TrioInitError::IoError(err) => AppError::IoErrorPath(err),
+            },
+            FindFileTriosError::IoErrorWithPath(err) => AppError::IoErrorPath(err),
+            FindFileTriosError::IoError(err) => AppError::IoError(err),
+        }
+        .throw(),
+    };
     println!("{:#?}", trios);
 
     let mut generate_count = 0;
@@ -58,7 +67,7 @@ pub fn build(original_path: OsString, matches: OsString, result: OsString) {
                 );
                 let mut file = File::create(&matching)
                     .expect("Directory creation goes first and dirs should be made first");
-                file.write_all(b"[]").unwrap_app_error();
+                file.write_all(b"[]").unwrap_app_error(&matching);
             } else {
                 continue;
             }
@@ -69,7 +78,7 @@ pub fn build(original_path: OsString, matches: OsString, result: OsString) {
 
         let res = from_value::<Patch>(changes);
         let patch = res.unwrap_or_else(|_| {
-            ApplicationError::InvalidFileFormat {
+            AppError::InvalidFileFormat {
                 file_path: &matching,
                 expected: "JSON patch file",
             }
@@ -77,7 +86,7 @@ pub fn build(original_path: OsString, matches: OsString, result: OsString) {
         });
 
         if let Err(_) = json_patch::patch(&mut original_json, &patch) {
-            ApplicationError::PatchError {
+            AppError::PatchError {
                 target_file: &original,
                 patch_file: &matching,
             }
@@ -85,10 +94,10 @@ pub fn build(original_path: OsString, matches: OsString, result: OsString) {
         };
 
         println!("{:?}", result);
-        let mut patched_file = File::create(result).expect("All files should have a base dir");
+        let mut patched_file = File::create(&result).expect("All files should have a base dir");
         patched_file
             .write_all(to_string_pretty(&original_json).unwrap().as_bytes())
-            .unwrap_app_error();
+            .unwrap_app_error(&result);
         generate_count += 1;
     }
     let msg = format!("Successfully generated {} files", generate_count);
@@ -101,8 +110,19 @@ changes - empty
 changed - have all files but changed
 */
 pub fn update(original_path: OsString, matches: OsString, result: OsString) {
-    let trios =
-        get_file_pairs(PathBuf::from("."), original_path, matches, result).unwrap_app_error();
+    // TODO: This repeats the build function which should be fixed (later)
+    let trios = match get_file_trios(PathBuf::from("."), original_path, matches, result) {
+        Ok(it) => it,
+        Err(err) => match err {
+            FindFileTriosError::TrioInitError(err) => match err {
+                TrioInitError::InconsistentFileTypes(err) => AppError::InconsistentFileTypes(err),
+                TrioInitError::IoError(err) => AppError::IoErrorPath(err),
+            },
+            FindFileTriosError::IoErrorWithPath(err) => AppError::IoErrorPath(err),
+            FindFileTriosError::IoError(err) => AppError::IoError(err),
+        }
+        .throw(),
+    };
 
     let mut changes_count = 0;
     for trio in trios {
@@ -131,8 +151,8 @@ pub fn update(original_path: OsString, matches: OsString, result: OsString) {
         let changed_json: Value = json_from_path(&changed);
 
         let diff = json_patch::diff(&original_json, &changed_json);
-        let mut changes_file = File::create(changes).unwrap_app_error();
-        File::write_all(&mut changes_file, diff.to_string().as_bytes()).unwrap_app_error();
+        let mut changes_file = File::create(&changes).unwrap_app_error(&changes);
+        File::write_all(&mut changes_file, diff.to_string().as_bytes()).unwrap_app_error(&changes);
 
         changes_count += 1;
     }
@@ -141,11 +161,12 @@ pub fn update(original_path: OsString, matches: OsString, result: OsString) {
 }
 
 fn json_from_path(path: &PathBuf) -> Value {
-    let mut file = File::open(path).unwrap_app_error();
+    println!("{:?}", &path);
+    let mut file = File::open(&path).unwrap_app_error(&path);
     let mut buf = String::new();
-    file.read_to_string(&mut buf).unwrap_app_error();
+    file.read_to_string(&mut buf).unwrap_app_error(&path);
     serde_json::from_str(&buf).unwrap_or_else(|_| {
-        ApplicationError::InvalidFileFormat {
+        AppError::InvalidFileFormat {
             file_path: path,
             expected: "JSON file",
         }

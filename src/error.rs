@@ -1,9 +1,13 @@
-use std::{path::Path, io::{self}, process::exit};
+use std::{path::{Path, PathBuf}, io::{self}, process::exit};
 
 use colored::Colorize;
+use thiserror::Error;
 
-pub enum ApplicationError<'a> {
+use crate::file_trio::InconsistentFileTypes;
+
+pub enum AppError<'a> {
     IoError(io::Error),
+    IoErrorPath(IoErrorWithPath<'a>),
     UnexpectedArgumentSize {
         expected: usize,
         received: usize,
@@ -23,28 +27,31 @@ pub enum ApplicationError<'a> {
         target_file: &'a Path,
         patch_file: &'a Path,
     },
+    InconsistentFileTypes(InconsistentFileTypes<'a>)
 }
 
-impl ApplicationError<'_> {
+impl AppError<'_> {
     pub fn throw(self) -> ! {
         let message: String = match self {
-            ApplicationError::UnexpectedArgumentSize { expected, received } => format!(
+            AppError::IoErrorPath(err) => err.to_string(),
+            AppError::IoError(err) => err.to_string(),
+            AppError::UnexpectedArgumentSize { expected, received } => format!(
                 "Not enough arguments, expected: {}, got: {}",
                 expected, received
             ),
-            ApplicationError::InvalidArgument {
+            AppError::InvalidArgument {
                 argument_pos,
                 message,
             } => format!("Invalid argument at {}, {}", argument_pos, message),
-            ApplicationError::InvalidFileFormat {
+            AppError::InvalidFileFormat {
                 file_path,
                 expected,
             } => format!("File {:?} is not a {}", file_path, expected),
-            ApplicationError::FileNotFound { file_name } => {
+            AppError::FileNotFound { file_name } => {
                 format!("Cannot find file {}", file_name)
             }
-            ApplicationError::PatchError { target_file, patch_file } => format!("Cannot patch file {:?} with {:?}", target_file, patch_file),
-            ApplicationError::IoError(err) => err.to_string(),
+            AppError::PatchError { target_file, patch_file } => format!("Cannot patch file {:?} with {:?}", target_file, patch_file),
+            AppError::InconsistentFileTypes(err) => err.to_string(),
         };
         eprintln!("{}{}", "Error: ".red(), message.red());
         panic!();
@@ -52,17 +59,41 @@ impl ApplicationError<'_> {
     }
 }
 
-pub trait UnwrapAppError<T> {
-    fn unwrap_app_error(self) -> T;
+#[derive(Debug, Error)]
+#[error("{} at {:?}", error, path)]
+pub struct IoErrorWithPath<'a> {
+    pub error: io::Error,
+    pub path: &'a Path 
 }
 
-impl<T> UnwrapAppError<T> for io::Result<T> {
-    fn unwrap_app_error(self: Result<T, std::io::Error>) -> T {
+impl<'a> IoErrorWithPath<'a> {
+    pub fn new(error: io::Error, path: &'a Path) -> Self {
+        Self { error, path }
+    }
+}
+
+pub trait UnwrapAppPathlessError<T> {
+    fn unwrap_app_error(self, path: &Path) -> T;
+}
+
+impl<T> UnwrapAppPathlessError<T> for io::Result<T> {
+    /// Should only be used in the main function
+    fn unwrap_app_error(self: Result<T, io::Error>, path: &Path) -> T {
         match self {
             Ok(it) => it,
             Err(err) => {
-                ApplicationError::IoError(err).throw();
+                AppError::IoErrorPath(IoErrorWithPath::new(err, path)).throw();
             }
         }
+    }
+}
+
+pub trait AddMessage {
+    fn attach_message(self, path: &Path) -> IoErrorWithPath;
+}
+
+impl AddMessage for io::Error {
+    fn attach_message(self: io::Error, path: &Path) -> IoErrorWithPath {
+        return IoErrorWithPath::new(self, path);
     }
 }
