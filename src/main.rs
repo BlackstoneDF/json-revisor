@@ -74,12 +74,12 @@ fn get_config() -> ProjectConfig {
     let path = PathBuf::from("./project.json");
     if let Ok(mut data) = File::open(&path) {
         let mut buf = String::new();
-        data.read_to_string(&mut buf).unwrap_app_error(&path);
+        data.read_to_string(&mut buf).unwrap_app_error(path.into());
         if let Ok(config) = from_str::<ProjectConfig>(&buf) {
             config
         } else {
             AppError::InvalidFileFormat {
-                file_path: &path,
+                file_path: path.into(),
                 expected: "JSON format",
             }
             .throw();

@@ -2,7 +2,7 @@ use std::{
     ffi::OsString,
     fs::{create_dir, File},
     io::{Read, Write},
-    path::PathBuf,
+    path::{PathBuf, Path}, rc::Rc,
 };
 
 use colored::Colorize;
@@ -67,19 +67,19 @@ pub fn build(original_path: OsString, matches: OsString, result: OsString) {
                 );
                 let mut file = File::create(&matching)
                     .expect("Directory creation goes first and dirs should be made first");
-                file.write_all(b"[]").unwrap_app_error(&matching);
+                file.write_all(b"[]").unwrap_app_error(matching.into());
             } else {
                 continue;
             }
         }
 
-        let mut original_json = json_from_path(&original);
-        let changes = json_from_path(&matching);
+        let mut original_json = json_from_path(original);
+        let changes = json_from_path(matching);
 
         let res = from_value::<Patch>(changes);
         let patch = res.unwrap_or_else(|_| {
             AppError::InvalidFileFormat {
-                file_path: &matching,
+                file_path: matching.into(),
                 expected: "JSON patch file",
             }
             .throw();
@@ -87,8 +87,8 @@ pub fn build(original_path: OsString, matches: OsString, result: OsString) {
 
         if let Err(_) = json_patch::patch(&mut original_json, &patch) {
             AppError::PatchError {
-                target_file: &original,
-                patch_file: &matching,
+                target_file: original.into(),
+                patch_file: matching.into(),
             }
             .throw();
         };
@@ -97,7 +97,7 @@ pub fn build(original_path: OsString, matches: OsString, result: OsString) {
         let mut patched_file = File::create(&result).expect("All files should have a base dir");
         patched_file
             .write_all(to_string_pretty(&original_json).unwrap().as_bytes())
-            .unwrap_app_error(&result);
+            .unwrap_app_error(result.into());
         generate_count += 1;
     }
     let msg = format!("Successfully generated {} files", generate_count);
@@ -147,12 +147,12 @@ pub fn update(original_path: OsString, matches: OsString, result: OsString) {
             continue;
         }
 
-        let original_json: Value = json_from_path(&original);
-        let changed_json: Value = json_from_path(&changed);
+        let original_json: Value = json_from_path(original);
+        let changed_json: Value = json_from_path(changed);
 
         let diff = json_patch::diff(&original_json, &changed_json);
-        let mut changes_file = File::create(&changes).unwrap_app_error(&changes);
-        File::write_all(&mut changes_file, diff.to_string().as_bytes()).unwrap_app_error(&changes);
+        let mut changes_file = File::create(&changes).unwrap_app_error(changes.into());
+        File::write_all(&mut changes_file, diff.to_string().as_bytes()).unwrap_app_error(changes.into());
 
         changes_count += 1;
     }
@@ -160,14 +160,14 @@ pub fn update(original_path: OsString, matches: OsString, result: OsString) {
     println!("{}", msg.bright_green());
 }
 
-fn json_from_path(path: &PathBuf) -> Value {
+fn json_from_path(path: &Path) -> Value {
     println!("{:?}", &path);
-    let mut file = File::open(&path).unwrap_app_error(&path);
+    let mut file = File::open(&path).unwrap_app_error(path.into());
     let mut buf = String::new();
-    file.read_to_string(&mut buf).unwrap_app_error(&path);
+    file.read_to_string(&mut buf).unwrap_app_error(path.into());
     serde_json::from_str(&buf).unwrap_or_else(|_| {
         AppError::InvalidFileFormat {
-            file_path: path,
+            file_path: path.into(),
             expected: "JSON file",
         }
         .throw();

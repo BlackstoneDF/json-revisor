@@ -1,13 +1,23 @@
-use std::{path::{Path, PathBuf}, io::{self}, process::exit};
+use std::{
+    io::{self},
+    path::{Path, PathBuf},
+    process::exit,
+    rc::Rc,
+    sync::Arc,
+};
 
 use colored::Colorize;
+use serde::de::Error;
 use thiserror::Error;
 
 use crate::file_trio::InconsistentFileTypes;
 
+// Make it easy to replace when threads are maybe needed
+pub type ErrorPath = Rc<Path>;
+
 pub enum AppError<'a> {
     IoError(io::Error),
-    IoErrorPath(IoErrorWithPath<'a>),
+    IoErrorPath(IoErrorWithPath),
     UnexpectedArgumentSize {
         expected: usize,
         received: usize,
@@ -17,17 +27,17 @@ pub enum AppError<'a> {
         message: &'a str,
     },
     InvalidFileFormat {
-        file_path: &'a Path,
+        file_path: ErrorPath,
         expected: &'a str,
     },
     FileNotFound {
         file_name: &'a str,
     },
     PatchError {
-        target_file: &'a Path,
-        patch_file: &'a Path,
+        target_file: ErrorPath,
+        patch_file: ErrorPath,
     },
-    InconsistentFileTypes(InconsistentFileTypes<'a>)
+    InconsistentFileTypes(InconsistentFileTypes),
 }
 
 impl AppError<'_> {
@@ -50,7 +60,10 @@ impl AppError<'_> {
             AppError::FileNotFound { file_name } => {
                 format!("Cannot find file {}", file_name)
             }
-            AppError::PatchError { target_file, patch_file } => format!("Cannot patch file {:?} with {:?}", target_file, patch_file),
+            AppError::PatchError {
+                target_file,
+                patch_file,
+            } => format!("Cannot patch file {:?} with {:?}", target_file, patch_file),
             AppError::InconsistentFileTypes(err) => err.to_string(),
         };
         eprintln!("{}{}", "Error: ".red(), message.red());
@@ -61,24 +74,24 @@ impl AppError<'_> {
 
 #[derive(Debug, Error)]
 #[error("{} at {:?}", error, path)]
-pub struct IoErrorWithPath<'a> {
+pub struct IoErrorWithPath {
     pub error: io::Error,
-    pub path: &'a Path 
+    pub path: ErrorPath,
 }
 
-impl<'a> IoErrorWithPath<'a> {
-    pub fn new(error: io::Error, path: &'a Path) -> Self {
+impl<'a> IoErrorWithPath {
+    pub fn new(error: io::Error, path: ErrorPath) -> Self {
         Self { error, path }
     }
 }
 
 pub trait UnwrapAppPathlessError<T> {
-    fn unwrap_app_error(self, path: &Path) -> T;
+    fn unwrap_app_error(self, path: ErrorPath) -> T;
 }
 
 impl<T> UnwrapAppPathlessError<T> for io::Result<T> {
     /// Should only be used in the main function
-    fn unwrap_app_error(self: Result<T, io::Error>, path: &Path) -> T {
+    fn unwrap_app_error(self: Result<T, io::Error>, path: ErrorPath) -> T {
         match self {
             Ok(it) => it,
             Err(err) => {
@@ -89,11 +102,11 @@ impl<T> UnwrapAppPathlessError<T> for io::Result<T> {
 }
 
 pub trait AddMessage {
-    fn attach_message(self, path: &Path) -> IoErrorWithPath;
+    fn attach_message(self, path: ErrorPath) -> IoErrorWithPath;
 }
 
 impl AddMessage for io::Error {
-    fn attach_message(self: io::Error, path: &Path) -> IoErrorWithPath {
+    fn attach_message(self: io::Error, path: ErrorPath) -> IoErrorWithPath {
         return IoErrorWithPath::new(self, path);
     }
 }

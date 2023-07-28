@@ -3,12 +3,13 @@ use std::{
     fs::{read_dir, FileType},
     io::{self},
     path::{Component, Path, PathBuf},
+    sync::Arc,
     vec,
 };
 
 use thiserror::Error;
 
-use crate::error::{AddMessage, IoErrorWithPath};
+use crate::error::{AddMessage, ErrorPath, IoErrorWithPath};
 
 // TODO: This function is bad, it is riddled with clones and bad solutions
 // AND error handling that looks like it has been written by a person who smokes crack
@@ -21,7 +22,7 @@ pub fn get_file_trios(
     original: OsString,
     matches: OsString,
     result: OsString,
-) -> Result<Vec<FilePathTrio>, FindFileTriosError<'static>> {
+) -> Result<Vec<FilePathTrio<'static>>, FindFileTriosError> {
     root.push(original);
     _get_file_trios(root, matches, result)
 }
@@ -30,25 +31,27 @@ fn _get_file_trios(
     path: PathBuf,
     matches: OsString,
     results: OsString,
-) -> Result<Vec<FilePathTrio>, FindFileTriosError<'static>> {
+) -> Result<Vec<FilePathTrio<'static>>, FindFileTriosError> {
     let current_file = {
         let matching_path =
             replace_item(&path, 1, &matches).expect("First index should always exist");
         let result_path =
             replace_item(&path, 1, &results).expect("First index should always exist");
-        FilePathTrio::new(path.clone(), matching_path, result_path)
+        FilePathTrio::new(&path, &matching_path, &result_path)
     }
     .map_err(|err| FindFileTriosError::TrioInitError(err))?;
 
     if path.is_dir() {
         let mut res: Vec<FilePathTrio> = Vec::new();
         res.push(current_file);
-        let other = path.clone();
         let read_dir = match read_dir(&path) {
             Ok(it) => it,
-            Err(err) => return Err(FindFileTriosError::IoErrorWithPath(err.attach_message(&other))),
+            Err(err) => {
+                return Err(FindFileTriosError::IoErrorWithPath(
+                    err.attach_message(path.into()),
+                ))
+            }
         };
-
         for entry in read_dir {
             let entry = entry.map_err(|err| {
                 FindFileTriosError::IoError(err) // Should never happen?
@@ -66,9 +69,9 @@ fn _get_file_trios(
     }
 }
 
-pub enum FindFileTriosError<'a> {
-    TrioInitError(TrioInitError<'a>),
-    IoErrorWithPath(IoErrorWithPath<'a>),
+pub enum FindFileTriosError {
+    TrioInitError(TrioInitError),
+    IoErrorWithPath(IoErrorWithPath),
     IoError(io::Error),
 }
 
@@ -86,52 +89,52 @@ pub fn replace_item(
 }
 
 #[derive(Debug)]
-pub struct FilePathTrio {
+pub struct FilePathTrio<'a> {
     pub file_type: FileType,
-    pub original: PathBuf,
-    pub changes: PathBuf,
-    pub changed: PathBuf,
+    pub original: &'a Path,
+    pub changes: &'a Path,
+    pub changed: &'a Path,
 }
 
-impl FilePathTrio {
+impl<'a> FilePathTrio<'a> {
     fn new(
-        original: PathBuf,
-        matching: PathBuf,
-        result: PathBuf,
-    ) -> Result<Self, TrioInitError<'static>> {
+        original: &'a Path,
+        matching: &'a Path,
+        result: &'a Path,
+    ) -> Result<Self, TrioInitError> {
         let file_type = original
             .metadata()
-            .map_err(|err: io::Error| TrioInitError::IoError(err.attach_message(&original)))?
+            .map_err(|err: io::Error| TrioInitError::IoError(err.attach_message(original.into())))?
             .file_type();
 
         let matching_type = matching
             .metadata()
-            .map_err(|err| TrioInitError::IoError(err.attach_message(&matching)))?
+            .map_err(|err| TrioInitError::IoError(err.attach_message(matching.into())))?
             .file_type();
 
         if file_type != matching_type {
             return Err(TrioInitError::InconsistentFileTypes(
                 InconsistentFileTypes {
                     file_type_a: file_type,
-                    path_a: &original,
+                    path_a: original.into(),
                     file_type_b: matching_type,
-                    path_b: &matching,
+                    path_b: matching.into(),
                 },
             ));
         }
 
         let result_type = result
             .metadata()
-            .map_err(|err| TrioInitError::IoError(err.attach_message(&result)))?
+            .map_err(|err| TrioInitError::IoError(err.attach_message(result.into())))?
             .file_type();
 
         if file_type != result_type {
             return Err(TrioInitError::InconsistentFileTypes(
                 InconsistentFileTypes {
                     file_type_a: file_type,
-                    path_a: &original,
+                    path_a: original.into(),
                     file_type_b: result_type,
-                    path_b: &result,
+                    path_b: result.into(),
                 },
             ));
         }
@@ -145,9 +148,9 @@ impl FilePathTrio {
     }
 }
 
-pub enum TrioInitError<'a> {
-    InconsistentFileTypes(InconsistentFileTypes<'a>),
-    IoError(IoErrorWithPath<'a>),
+pub enum TrioInitError {
+    InconsistentFileTypes(InconsistentFileTypes),
+    IoError(IoErrorWithPath),
 }
 
 #[derive(Debug, Error)]
@@ -158,11 +161,11 @@ pub enum TrioInitError<'a> {
     file_type_a,
     path_a
 )]
-pub struct InconsistentFileTypes<'a> {
+pub struct InconsistentFileTypes {
     file_type_a: FileType,
-    path_a: &'a Path,
+    path_a: ErrorPath,
     file_type_b: FileType,
-    path_b: &'a Path,
+    path_b: ErrorPath,
 }
 
 #[derive(Debug, Error)]
