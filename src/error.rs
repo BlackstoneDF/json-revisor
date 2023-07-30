@@ -1,13 +1,12 @@
 use std::{
     io::{self},
-    path::{Path, PathBuf},
+    path::Path,
     process::exit,
     rc::Rc,
-    sync::Arc,
 };
 
 use colored::Colorize;
-use serde::de::Error;
+
 use thiserror::Error;
 
 use crate::file_trio::InconsistentFileTypes;
@@ -67,7 +66,7 @@ impl AppError<'_> {
             AppError::InconsistentFileTypes(err) => err.to_string(),
         };
         eprintln!("{}{}", "Error: ".red(), message.red());
-        panic!();
+        // panic!();
         exit(101);
     }
 }
@@ -75,23 +74,29 @@ impl AppError<'_> {
 #[derive(Debug, Error)]
 #[error("{} at {:?}", error, path)]
 pub struct IoErrorWithPath {
-    pub error: io::Error,
-    pub path: ErrorPath,
+    error: io::Error,
+    path: ErrorPath,
 }
 
 impl<'a> IoErrorWithPath {
     pub fn new(error: io::Error, path: ErrorPath) -> Self {
         Self { error, path }
     }
+    pub fn throw(self) -> ! {
+        AppError::IoErrorPath(self).throw()
+    }
 }
 
+/*
+// Deleting soon
 pub trait UnwrapAppPathlessError<T> {
-    fn unwrap_app_error(self, path: ErrorPath) -> T;
+    fn unwrap_app_path(self, path: ErrorPath) -> T;
+    fn unwrap_app(self) -> T;
 }
 
 impl<T> UnwrapAppPathlessError<T> for io::Result<T> {
     /// Should only be used in the main function
-    fn unwrap_app_error(self: Result<T, io::Error>, path: ErrorPath) -> T {
+    fn unwrap_app_path(self: Result<T, io::Error>, path: ErrorPath) -> T {
         match self {
             Ok(it) => it,
             Err(err) => {
@@ -99,14 +104,28 @@ impl<T> UnwrapAppPathlessError<T> for io::Result<T> {
             }
         }
     }
-}
 
-pub trait AddMessage {
+    fn unwrap_app(self: Result<T, io::Error>) -> T {
+        match self {
+            Ok(it) => it,
+            Err(err) => {
+                err.throw()
+            }
+        }
+    }
+}
+*/
+
+pub trait AppErrorIo {
     fn attach_message(self, path: ErrorPath) -> IoErrorWithPath;
+    fn throw(self) -> !;
 }
 
-impl AddMessage for io::Error {
+impl AppErrorIo for io::Error {
     fn attach_message(self: io::Error, path: ErrorPath) -> IoErrorWithPath {
         return IoErrorWithPath::new(self, path);
+    }
+    fn throw(self: io::Error) -> ! {
+        AppError::IoError(self).throw()
     }
 }

@@ -4,12 +4,11 @@ use std::{
     fs::File,
     io::Read,
     path::PathBuf,
-    process::exit,
     sync::Arc,
 };
 
 use config::ProjectConfig;
-use error::{AppError, UnwrapAppPathlessError};
+use error::{AppError, AppErrorIo};
 
 use serde_json::from_str;
 
@@ -19,6 +18,8 @@ pub mod error;
 pub mod file_trio;
 
 pub type ImmutableString = Arc<str>;
+
+const CONFIG_FILE: &str = "project.json";
 
 fn main() {
     env::set_var("RUST_BACKTRACE", "1");
@@ -50,7 +51,7 @@ fn main() {
         }
         "update" => {
             let config = get_config();
-            commands::build(
+            commands::update(
                 OsString::from(config.paths.original),
                 OsString::from(config.paths.changes),
                 OsString::from(config.paths.output),
@@ -74,7 +75,11 @@ fn get_config() -> ProjectConfig {
     let path = PathBuf::from("./project.json");
     if let Ok(mut data) = File::open(&path) {
         let mut buf = String::new();
-        data.read_to_string(&mut buf).unwrap_app_error(path.into());
+        match data.read_to_string(&mut buf) {
+            Ok(it) => it,
+            Err(err) => AppError::IoErrorPath(err.attach_message(path.into())).throw(),
+        };
+        
         if let Ok(config) = from_str::<ProjectConfig>(&buf) {
             config
         } else {
@@ -86,7 +91,7 @@ fn get_config() -> ProjectConfig {
         }
     } else {
         AppError::FileNotFound {
-            file_name: "project.json",
+            file_name: CONFIG_FILE,
         }
         .throw();
     }

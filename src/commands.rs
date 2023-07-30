@@ -2,7 +2,7 @@ use std::{
     ffi::OsString,
     fs::{create_dir, File},
     io::{Read, Write},
-    path::{PathBuf, Path}, rc::Rc,
+    path::PathBuf,
 };
 
 use colored::Colorize;
@@ -10,8 +10,8 @@ use json_patch::Patch;
 use serde_json::{from_value, to_string_pretty, Value};
 
 use crate::{
-    error::{AppError, UnwrapAppPathlessError},
-    file_trio::{get_file_trios, FindFileTriosError, TrioInitError},
+    error::{AppError, AppErrorIo},
+    file_trio::{get_file_trios, FilePath, FindFileTriosError, TrioInitError},
 };
 
 /*
@@ -22,43 +22,39 @@ changed - empty
 pub fn build(original_path: OsString, matches: OsString, result: OsString) {
     let trios = match get_file_trios(PathBuf::from("."), original_path, matches, result) {
         Ok(it) => it,
-        Err(err) => match err {
-            FindFileTriosError::TrioInitError(err) => match err {
-                TrioInitError::InconsistentFileTypes(err) => AppError::InconsistentFileTypes(err),
-                TrioInitError::IoError(err) => AppError::IoErrorPath(err),
-            },
-            FindFileTriosError::IoErrorWithPath(err) => AppError::IoErrorPath(err),
-            FindFileTriosError::IoError(err) => AppError::IoError(err),
+        Err(err) => {
+            match err {
+                FindFileTriosError::TrioInitError(err) => match err {
+                    TrioInitError::InconsistentFileTypes(err) => {
+                        AppError::InconsistentFileTypes(err)
+                    }
+                    TrioInitError::IoError(err) => AppError::IoErrorPath(err),
+                },
+                FindFileTriosError::IoErrorWithPath(err) => AppError::IoErrorPath(err),
+                FindFileTriosError::IoError(err) => AppError::IoError(err),
+            }
+            .throw()
         }
-        .throw(),
     };
-    println!("{:#?}", trios);
 
     let mut generate_count = 0;
     for trio in trios {
-        let matching = trio.changes;
-        let exists = matching.exists();
 
+        let file_type = trio.file_type;
         let original = trio.original;
+        let matching = trio.changes;
         let result = trio.changed;
 
-        // TODO: Finish this
-        if original.is_dir() && !(matching.exists() && result.exists()) {
-            continue;
-        }
-
-        if !exists {
-            if original.is_dir() {
+        if !matching.exists()  {
+            if file_type.is_dir() {
                 println!(
                     "{}{}{}",
                     "Warning: Path ".yellow(),
                     original.to_string_lossy().yellow(),
                     " does not have a matching changes folder, creating folder...".yellow(),
                 );
-                create_dir(&matching).expect("All dirs required to be made should already be made");
                 create_dir(&result).expect("All dirs required to be made should already be made");
-                continue;
-            } else if original.is_file() {
+            } else if file_type.is_file() {
                 println!(
                     "{}{}{}",
                     "Warning: Path ".yellow(),
@@ -67,23 +63,37 @@ pub fn build(original_path: OsString, matches: OsString, result: OsString) {
                 );
                 let mut file = File::create(&matching)
                     .expect("Directory creation goes first and dirs should be made first");
-                file.write_all(b"[]").unwrap_app_error(matching.into());
-            } else {
-                continue;
+                match file.write_all(b"[]") {
+                    Ok(it) => it,
+                    Err(err) => err.attach_message(matching).throw(),
+                };
             }
+            continue;
         }
 
-        let mut original_json = json_from_path(original);
-        let changes = json_from_path(matching);
+        if !result.exists()  {
+            if file_type.is_dir() {
+                create_dir(&result).expect("All dirs required to be made should already be made");
+                continue;
+            }  
+        }
+
+        if file_type.is_dir() {
+            continue;
+        }
+
+        let mut original_json = json_from_path(original.clone());
+        let changes = json_from_path(matching.clone());
 
         let res = from_value::<Patch>(changes);
-        let patch = res.unwrap_or_else(|_| {
-            AppError::InvalidFileFormat {
+        let patch = match res {
+            Ok(it) => it,
+            Err(_err) => AppError::InvalidFileFormat {
                 file_path: matching.into(),
                 expected: "JSON patch file",
             }
-            .throw();
-        });
+            .throw(),
+        };
 
         if let Err(_) = json_patch::patch(&mut original_json, &patch) {
             AppError::PatchError {
@@ -93,11 +103,11 @@ pub fn build(original_path: OsString, matches: OsString, result: OsString) {
             .throw();
         };
 
-        println!("{:?}", result);
         let mut patched_file = File::create(&result).expect("All files should have a base dir");
-        patched_file
-            .write_all(to_string_pretty(&original_json).unwrap().as_bytes())
-            .unwrap_app_error(result.into());
+        match patched_file.write_all(to_string_pretty(&original_json).unwrap().as_bytes()) {
+            Ok(it) => it,
+            Err(err) => err.attach_message(result.into()).throw(),
+        }
         generate_count += 1;
     }
     let msg = format!("Successfully generated {} files", generate_count);
@@ -151,8 +161,16 @@ pub fn update(original_path: OsString, matches: OsString, result: OsString) {
         let changed_json: Value = json_from_path(changed);
 
         let diff = json_patch::diff(&original_json, &changed_json);
-        let mut changes_file = File::create(&changes).unwrap_app_error(changes.into());
-        File::write_all(&mut changes_file, diff.to_string().as_bytes()).unwrap_app_error(changes.into());
+
+        let mut changes_file = match File::create(&changes) {
+            Ok(it) => it,
+            Err(err) => err.attach_message(changes.into()).throw(),
+        };
+
+        match File::write_all(&mut changes_file, diff.to_string().as_bytes()) {
+            Ok(_) => (),
+            Err(err) => err.attach_message(changes.into()).throw(),
+        };
 
         changes_count += 1;
     }
@@ -160,11 +178,17 @@ pub fn update(original_path: OsString, matches: OsString, result: OsString) {
     println!("{}", msg.bright_green());
 }
 
-fn json_from_path(path: &Path) -> Value {
-    println!("{:?}", &path);
-    let mut file = File::open(&path).unwrap_app_error(path.into());
+// Too lazy to return error
+fn json_from_path(path: FilePath) -> Value {
+    let mut file = match File::open(&path) {
+        Ok(it) => it,
+        Err(err) => err.attach_message(path.into()).throw(),
+    };
     let mut buf = String::new();
-    file.read_to_string(&mut buf).unwrap_app_error(path.into());
+    match file.read_to_string(&mut buf) {
+        Ok(_) => (),
+        Err(err) => err.attach_message(path.into()).throw(),
+    }
     serde_json::from_str(&buf).unwrap_or_else(|_| {
         AppError::InvalidFileFormat {
             file_path: path.into(),
