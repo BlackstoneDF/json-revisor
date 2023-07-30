@@ -52,7 +52,7 @@ fn _get_file_trios(
             Ok(it) => it,
             Err(err) => {
                 return Err(FindFileTriosError::IoErrorWithPath(
-                    err.attach_message(path.into()),
+                    err.attach_path(path.into()),
                 ))
             }
         };
@@ -112,7 +112,7 @@ impl FilePathTrio {
     ) -> Result<Self, TrioInitError> {
         let file_type = match original.metadata() {
             Ok(it) => it,
-            Err(err) => return Err(TrioInitError::IoError(err.attach_message(original.into()))),
+            Err(err) => return Err(TrioInitError::IoError(err.attach_path(original.into()))),
         }
         .file_type();
 

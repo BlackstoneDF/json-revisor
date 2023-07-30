@@ -19,11 +19,10 @@ pub mod file_trio;
 
 pub type ImmutableString = Arc<str>;
 
-const CONFIG_FILE: &str = "project.json";
+pub const CONFIG_FILE: &str = "project.json";
 
 fn main() {
-    env::set_var("RUST_BACKTRACE", "1");
-
+    // env::set_var("RUST_BACKTRACE", "1");
     let args: Vec<String> = args().collect();
 
     if args.len() != 2 {
@@ -41,12 +40,13 @@ fn main() {
         .as_str()
     {
         "init" => commands::init(),
+        "init-default" => commands::init_default(),
         "build" => {
             let config = get_config();
             commands::build(
                 OsString::from(config.paths.original),
                 OsString::from(config.paths.changes),
-                OsString::from(config.paths.output),
+                OsString::from(config.paths.revise),
             );
         }
         "update" => {
@@ -54,7 +54,7 @@ fn main() {
             commands::update(
                 OsString::from(config.paths.original),
                 OsString::from(config.paths.changes),
-                OsString::from(config.paths.output),
+                OsString::from(config.paths.revise),
             );
         }
         "help" => {
@@ -64,7 +64,7 @@ fn main() {
             commands::print_help();
             AppError::InvalidArgument {
                 argument_pos: 1,
-                message: "Not in the list of args",
+                message: "not in the list of args",
             }
             .throw();
         }
@@ -77,7 +77,7 @@ fn get_config() -> ProjectConfig {
         let mut buf = String::new();
         match data.read_to_string(&mut buf) {
             Ok(it) => it,
-            Err(err) => AppError::IoErrorPath(err.attach_message(path.into())).throw(),
+            Err(err) => AppError::IoErrorPath(err.attach_path(path.into())).throw(),
         };
         
         if let Ok(config) = from_str::<ProjectConfig>(&buf) {

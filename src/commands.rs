@@ -1,7 +1,7 @@
 use std::{
     ffi::OsString,
     fs::{create_dir, File},
-    io::{Read, Write},
+    io::{self, Read, Write},
     path::PathBuf,
 };
 
@@ -10,8 +10,10 @@ use json_patch::Patch;
 use serde_json::{from_value, to_string_pretty, Value};
 
 use crate::{
-    error::{AppError, AppErrorIo},
+    config::{ProjectConfig, ProjectPaths},
+    error::{AppError, AppErrorIo, UnwrapAppPathlessError},
     file_trio::{get_file_trios, FilePath, FindFileTriosError, TrioInitError},
+    CONFIG_FILE,
 };
 
 /*
@@ -22,30 +24,25 @@ changed - empty
 pub fn build(original_path: OsString, matches: OsString, result: OsString) {
     let trios = match get_file_trios(PathBuf::from("."), original_path, matches, result) {
         Ok(it) => it,
-        Err(err) => {
-            match err {
-                FindFileTriosError::TrioInitError(err) => match err {
-                    TrioInitError::InconsistentFileTypes(err) => {
-                        AppError::InconsistentFileTypes(err)
-                    }
-                    TrioInitError::IoError(err) => AppError::IoErrorPath(err),
-                },
-                FindFileTriosError::IoErrorWithPath(err) => AppError::IoErrorPath(err),
-                FindFileTriosError::IoError(err) => AppError::IoError(err),
-            }
-            .throw()
+        Err(err) => match err {
+            FindFileTriosError::TrioInitError(err) => match err {
+                TrioInitError::InconsistentFileTypes(err) => AppError::InconsistentFileTypes(err),
+                TrioInitError::IoError(err) => AppError::IoErrorPath(err),
+            },
+            FindFileTriosError::IoErrorWithPath(err) => AppError::IoErrorPath(err),
+            FindFileTriosError::IoError(err) => AppError::IoError(err),
         }
+        .throw(),
     };
 
     let mut generate_count = 0;
     for trio in trios {
-
         let file_type = trio.file_type;
         let original = trio.original;
         let matching = trio.changes;
         let result = trio.changed;
 
-        if !matching.exists()  {
+        if !matching.exists() {
             if file_type.is_dir() {
                 println!(
                     "{}{}{}",
@@ -65,17 +62,17 @@ pub fn build(original_path: OsString, matches: OsString, result: OsString) {
                     .expect("Directory creation goes first and dirs should be made first");
                 match file.write_all(b"[]") {
                     Ok(it) => it,
-                    Err(err) => err.attach_message(matching).throw(),
+                    Err(err) => err.attach_path(matching).throw(),
                 };
             }
             continue;
         }
 
-        if !result.exists()  {
+        if !result.exists() {
             if file_type.is_dir() {
                 create_dir(&result).expect("All dirs required to be made should already be made");
                 continue;
-            }  
+            }
         }
 
         if file_type.is_dir() {
@@ -106,7 +103,7 @@ pub fn build(original_path: OsString, matches: OsString, result: OsString) {
         let mut patched_file = File::create(&result).expect("All files should have a base dir");
         match patched_file.write_all(to_string_pretty(&original_json).unwrap().as_bytes()) {
             Ok(it) => it,
-            Err(err) => err.attach_message(result.into()).throw(),
+            Err(err) => err.attach_path(result.into()).throw(),
         }
         generate_count += 1;
     }
@@ -164,12 +161,12 @@ pub fn update(original_path: OsString, matches: OsString, result: OsString) {
 
         let mut changes_file = match File::create(&changes) {
             Ok(it) => it,
-            Err(err) => err.attach_message(changes.into()).throw(),
+            Err(err) => err.attach_path(changes.into()).throw(),
         };
 
         match File::write_all(&mut changes_file, diff.to_string().as_bytes()) {
             Ok(_) => (),
-            Err(err) => err.attach_message(changes.into()).throw(),
+            Err(err) => err.attach_path(changes.into()).throw(),
         };
 
         changes_count += 1;
@@ -182,12 +179,12 @@ pub fn update(original_path: OsString, matches: OsString, result: OsString) {
 fn json_from_path(path: FilePath) -> Value {
     let mut file = match File::open(&path) {
         Ok(it) => it,
-        Err(err) => err.attach_message(path.into()).throw(),
+        Err(err) => err.attach_path(path.into()).throw(),
     };
     let mut buf = String::new();
     match file.read_to_string(&mut buf) {
         Ok(_) => (),
-        Err(err) => err.attach_message(path.into()).throw(),
+        Err(err) => err.attach_path(path.into()).throw(),
     }
     serde_json::from_str(&buf).unwrap_or_else(|_| {
         AppError::InvalidFileFormat {
@@ -199,8 +196,135 @@ fn json_from_path(path: FilePath) -> Value {
 }
 
 pub fn init() {
-    // Node inspired
-    todo!()
+    println!(
+        "This utility walks you through in creating a project.json file by asking some questions.\nYou can use Ctrl+C to exit any time"
+    );
+
+    let stdin = io::stdin();
+    let mut stdout = io::stdout();
+
+    let name = {
+        let path = std::env::current_dir().expect("This program must be a binary");
+
+        let default = path
+            .file_name()
+            .expect("Program directory name always has a name")
+            .to_string_lossy()
+            .to_string();
+
+        print!("Name ({}): ", default);
+        stdout.flush().unwrap_app();
+
+        let mut name = String::new();
+        stdin.read_line(&mut name).unwrap_app();
+        let name = name.trim();
+        if name.is_empty() {
+            default
+        } else {
+            name.to_string()
+        }
+    };
+
+    let description = {
+        print!("Description: ");
+        stdout.flush().unwrap_app();
+
+        let mut description = String::new();
+        stdin.read_line(&mut description).unwrap_app();
+        description.trim().to_string()
+    };
+
+    let version = {
+        const DEFAULT_VERSION: &str = "1.0.0";
+        print!("Version ({}): ", DEFAULT_VERSION);
+        stdout.flush().unwrap_app();
+
+        let mut version = String::new();
+        stdin.read_line(&mut version).unwrap_app();
+        let version = version.trim();
+        if version.is_empty() {
+            DEFAULT_VERSION.to_string()
+        } else {
+            version.to_string()
+        }
+    };
+
+    let authors = {
+        print!("Author: ");
+        stdout.flush().unwrap_app();
+
+        let mut author = String::new();
+        stdin.read_line(&mut author).unwrap_app();
+        
+        vec![author.trim().to_string()]
+    };
+
+    let license = {
+        const DEFAULT_LICENSE: &str = "MIT";
+        print!("License: ({}): ", DEFAULT_LICENSE);
+        stdout.flush().unwrap_app();
+
+        let mut license = String::new();
+        stdin.read_line(&mut license).unwrap_app();
+        let license = license.trim();
+        if license.is_empty() {
+            DEFAULT_LICENSE.to_string()
+        } else {
+            license.to_string()
+        }
+    };
+
+    let config = ProjectConfig {
+        name,
+        description,
+        version,
+        authors,
+        license,
+        paths: ProjectPaths {
+            original: "original".to_string(),
+            changes: "changes".to_string(),
+            revise: "revise".to_string(),
+        },
+    };
+
+    let config =
+        serde_json::to_string_pretty(&config).expect("Correct steps taken to create config");
+
+    println!("Config: \n{}", config);
+    print!("Is this OK? (yes)");
+    stdout.flush().unwrap_app();
+
+    let mut buf = String::new();
+    stdin.read_line(&mut buf).unwrap_app();
+    let buf = buf.trim();
+
+    if !buf.is_empty() && buf != "y" && buf != "yes" {
+        println!("Aborted");
+    } else {
+        let mut file = match File::create(CONFIG_FILE) {
+            Ok(it) => it,
+            // Unsure of a good way to construct a Rc<Path>
+            Err(err) => err.attach_path(PathBuf::from(CONFIG_FILE).into()).throw(),
+        };
+
+        match file.write(config.as_bytes()) {
+            Ok(_) => (),
+            Err(err) => err.attach_path(PathBuf::from(CONFIG_FILE).into()).throw(),
+        };
+    }
+}
+
+pub fn init_default() {
+    let mut file = match File::create(CONFIG_FILE) {
+        Ok(it) => it,
+        // Unsure of a good way to construct a Rc<Path>
+        Err(err) => err.attach_path(PathBuf::from(CONFIG_FILE).into()).throw(),
+    };
+
+    match file.write(include_bytes!("static/project.json")) {
+        Ok(_) => (),
+        Err(err) => err.attach_path(PathBuf::from(CONFIG_FILE).into()).throw(),
+    };
 }
 
 pub fn print_help() {

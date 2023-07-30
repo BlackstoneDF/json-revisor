@@ -5,9 +5,9 @@ pub struct ProjectConfig {
     pub name: String,
     pub description: String,
     pub version: String,
-    pub authors: Vec<String>,
     pub license: String,
 
+    pub authors: Vec<String>,
     pub paths: ProjectPaths,
 }
 
@@ -15,5 +15,5 @@ pub struct ProjectConfig {
 pub struct ProjectPaths {
     pub original: String,
     pub changes: String,
-    pub output: String,
+    pub revise: String,
 }
